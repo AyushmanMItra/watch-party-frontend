@@ -11,7 +11,7 @@ function App() {
   const [isAdmin, setIsAdmin] = useState(false);
   const [videoFile, setVideoFile] = useState(null);
   const [videoUrl, setVideoUrl] = useState('');
-  const [isConnected, setIsConnected] = useState(socket.connected); // NEW: Server Status
+  const [isConnected, setIsConnected] = useState(socket.connected);
   
   const [messages, setMessages] = useState([]);
   const [chatInput, setChatInput] = useState('');
@@ -22,11 +22,9 @@ function App() {
   const [myStream, setMyStream] = useState(null);
   const peerConnectionRef = useRef(null);
 
-  // NEW: Bulletproof Server Connection & Auto-Rejoin
   useEffect(() => {
     const onConnect = () => {
       setIsConnected(true);
-      // If the server blips, force the user back into their room!
       if (inRoom && roomId) {
         socket.emit('join-room', roomId);
       }
@@ -42,7 +40,6 @@ function App() {
     };
   }, [inRoom, roomId]);
 
-  // 1. Get Webcam & Initialize WebRTC
   useEffect(() => {
     if (inRoom) {
       navigator.mediaDevices.getUserMedia({ video: true, audio: true })
@@ -55,7 +52,6 @@ function App() {
     }
   }, [inRoom, roomId]);
 
-  // 2. Handle Socket & WebRTC Events
   useEffect(() => {
     if (!inRoom) return;
 
@@ -64,7 +60,6 @@ function App() {
     socket.on('sync-pause', () => { if (videoRef.current) videoRef.current.pause(); });
     socket.on('sync-seek', (time) => { if (videoRef.current) videoRef.current.currentTime = time; });
     
-    // Fixed message receiving
     socket.on('receive-message', (data) => {
       setMessages((prev) => [...prev, data]);
     });
@@ -107,7 +102,6 @@ function App() {
     };
   }, [inRoom, myStream, roomId]);
 
-  // UI Handlers
   const handleCreateRoom = () => {
     const newRoomCode = Math.random().toString(36).substring(2, 7).toUpperCase();
     setRoomId(newRoomCode);
@@ -141,12 +135,11 @@ function App() {
 
   if (!inRoom) {
     return (
-      <div className="app-container">
+      <div className="app-container" style={{ justifyContent: 'center', alignItems: 'center', height: '100vh' }}>
         <div className="glass-card">
           <h2>🎬 Watch Party</h2>
           <p>Host movies with friends in real-time.</p>
           
-          {/* Connection Status Indicator */}
           <div style={{ padding: '10px', margin: '10px 0', borderRadius: '5px', backgroundColor: isConnected ? 'rgba(35, 134, 54, 0.2)' : 'rgba(218, 54, 51, 0.2)', color: isConnected ? '#2ea043' : '#ff7b72' }}>
             {isConnected ? '🟢 Connected to Server' : '🔴 Disconnected - Waking up server...'}
           </div>
@@ -159,8 +152,8 @@ function App() {
 
           <div style={{ marginTop: '20px' }}>
             <p style={{ fontSize: '0.9rem', color: '#8b949e' }}>Or join an existing room:</p>
-            <input type="text" className="input-field" placeholder="Enter 5-Letter Code" value={roomId} onChange={(e) => setRoomId(e.target.value)} style={{ textAlign: 'center', letterSpacing: '2px', textTransform: 'uppercase' }} />
-            <button className="btn-primary" onClick={handleJoinRoom} style={{ width: '100%', marginTop: '10px', backgroundColor: '#1f6feb' }} disabled={!isConnected}>
+            <input type="text" className="input-field" placeholder="Enter 5-Letter Code" value={roomId} onChange={(e) => setRoomId(e.target.value)} style={{ textAlign: 'center', letterSpacing: '2px', textTransform: 'uppercase', marginBottom: '10px' }} />
+            <button className="btn-secondary" onClick={handleJoinRoom} style={{ width: '100%', backgroundColor: '#1f6feb', color: '#fff' }} disabled={!isConnected}>
               Join Room
             </button>
           </div>
@@ -171,11 +164,24 @@ function App() {
 
   return (
     <div className="app-container">
-      <h2>Room Code: <span style={{ color: '#fff', letterSpacing: '2px' }}>{roomId}</span> <span style={{fontSize: '0.8rem', color: '#8b949e'}}>{isAdmin ? '(Admin)' : '(Member)'}</span></h2>
-      {isAdmin && <p style={{ color: '#8b949e', marginTop: '-10px' }}>Share this code with your friends so they can join!</p>}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', maxWidth: '900px', marginBottom: '10px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
+          <h2>Room Code: <span style={{ color: '#58a6ff', letterSpacing: '2px' }}>{roomId}</span> <span style={{fontSize: '0.8rem', color: '#8b949e'}}>{isAdmin ? '(Admin)' : '(Member)'}</span></h2>
+          <button 
+            className="btn-secondary" 
+            onClick={() => {
+              navigator.clipboard.writeText(roomId);
+              alert('Room code copied to clipboard!');
+            }}
+            style={{ padding: '6px 12px', fontSize: '0.85rem' }}
+          >
+            📋 Copy Code
+          </button>
+        </div>
+      </div>
 
       {isAdmin && (
-        <div className="glass-card" style={{ marginBottom: '20px' }}>
+        <div className="glass-card" style={{ marginBottom: '20px', maxWidth: '900px', width: '100%', textAlign: 'left', padding: '15px' }}>
           <h3>Admin Controls</h3>
           <input type="file" accept="video/*" onChange={(e) => setVideoFile(e.target.files[0])} style={{ marginBottom: '15px', color: '#c9d1d9' }} />
           <br/>
@@ -188,13 +194,12 @@ function App() {
           <video className="main-video" ref={videoRef} src={videoUrl} controls={isAdmin} onPlay={handlePlay} onPause={handlePause} onSeeked={handleSeek} />
         </div>
       ) : (
-        <div className="glass-card" style={{ padding: '40px', margin: '20px 0' }}>
+        <div className="glass-card" style={{ padding: '40px', margin: '20px 0', maxWidth: '900px', width: '100%' }}>
           <p>Waiting for the admin to upload a video...</p>
         </div>
       )}
 
       <div className="dashboard">
-        {/* Chat Panel */}
         <div className="panel">
           <h3>Live Chat</h3>
           <div className="chat-box">
@@ -205,21 +210,19 @@ function App() {
             ))}
           </div>
           <div className="chat-input-row">
-            <input type="text" className="input-field" style={{ margin: 0 }} value={chatInput} onChange={(e) => setChatInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && sendMessage()} placeholder="Type a message..." />
+            <input type="text" className="input-field" value={chatInput} onChange={(e) => setChatInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && sendMessage()} placeholder="Type a message..." />
             <button className="btn-primary" onClick={sendMessage}>Send</button>
           </div>
         </div>
 
-        {/* My Camera Panel */}
         <div className="panel">
           <h3>My Camera</h3>
           <video className="cam-video" ref={myVideoRef} autoPlay muted />
         </div>
 
-        {/* Partner Camera Panel */}
         <div className="panel">
           <h3>Partner Camera</h3>
-          <video className="cam-video partner" ref={partnerVideoRef} autoPlay />
+          <video className="cam-video" ref={partnerVideoRef} autoPlay />
         </div>
       </div>
     </div>
