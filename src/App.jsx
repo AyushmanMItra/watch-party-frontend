@@ -2,7 +2,6 @@ import { useState, useRef, useEffect } from 'react';
 import io from 'socket.io-client';
 import './App.css'; 
 
-// Connected to your correct live Railway server!
 const BACKEND_URL = 'https://watch-party-backend-production-abfa.up.railway.app';
 const socket = io(BACKEND_URL);
 
@@ -18,27 +17,23 @@ function App() {
 
   const videoRef = useRef(null);
   
-  // WebRTC States & Refs
   const myVideoRef = useRef(null);
   const partnerVideoRef = useRef(null);
   const [myStream, setMyStream] = useState(null);
   const peerConnectionRef = useRef(null);
 
-  // 1. Get Webcam & Initialize WebRTC
   useEffect(() => {
     if (inRoom) {
       navigator.mediaDevices.getUserMedia({ video: true, audio: true })
         .then((stream) => {
           setMyStream(stream);
           if (myVideoRef.current) myVideoRef.current.srcObject = stream;
-          
           socket.emit('user-ready-for-video', roomId);
         })
         .catch((error) => console.error('Media access error:', error));
     }
   }, [inRoom, roomId]);
 
-  // 2. Handle Socket & WebRTC Events
   useEffect(() => {
     if (!inRoom) return;
 
@@ -50,17 +45,9 @@ function App() {
 
     const createPeerConnection = () => {
       const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
-      
       if (myStream) myStream.getTracks().forEach(track => pc.addTrack(track, myStream));
-
-      pc.ontrack = (event) => {
-        if (partnerVideoRef.current) partnerVideoRef.current.srcObject = event.streams[0];
-      };
-
-      pc.onicecandidate = (event) => {
-        if (event.candidate) socket.emit('webrtc-ice-candidate', roomId, event.candidate);
-      };
-      
+      pc.ontrack = (event) => { if (partnerVideoRef.current) partnerVideoRef.current.srcObject = event.streams[0]; };
+      pc.onicecandidate = (event) => { if (event.candidate) socket.emit('webrtc-ice-candidate', roomId, event.candidate); };
       return pc;
     };
 
@@ -80,15 +67,11 @@ function App() {
     });
 
     socket.on('webrtc-answer', async (answer) => {
-      if (peerConnectionRef.current) {
-        await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(answer));
-      }
+      if (peerConnectionRef.current) await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(answer));
     });
 
     socket.on('webrtc-ice-candidate', async (candidate) => {
-      if (peerConnectionRef.current) {
-        await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(candidate));
-      }
+      if (peerConnectionRef.current) await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(candidate));
     });
 
     return () => {
@@ -98,14 +81,11 @@ function App() {
     };
   }, [inRoom, myStream, roomId]);
 
-  // UI Handlers
   const handleJoinRoom = () => { const clean = roomId.trim(); if (clean !== '') { setRoomId(clean); socket.emit('join-room', clean); setInRoom(true); }};
   
   const handleUpload = async () => {
     if (!videoFile) return;
     const formData = new FormData(); formData.append('video', videoFile);
-    
-    // Upload points to Railway
     const res = await fetch(`${BACKEND_URL}/upload`, { method: 'POST', body: formData });
     const data = await res.json();
     setVideoUrl(data.downloadUrl); socket.emit('video-uploaded', roomId, data.downloadUrl);
@@ -118,52 +98,74 @@ function App() {
 
   if (!inRoom) {
     return (
-      <div style={{ textAlign: 'center', marginTop: '50px' }}>
-        <h2>🎬 Welcome to the Watch Party</h2>
-        <input type="text" placeholder="Enter Room ID" value={roomId} onChange={(e) => setRoomId(e.target.value)} style={{ padding: '8px', border: '1px solid #ccc', borderRadius: '4px' }} />
-        <div style={{ marginTop: '10px' }}><label><input type="checkbox" checked={isAdmin} onChange={(e) => setIsAdmin(e.target.checked)} /> Admin</label></div>
-        <button onClick={handleJoinRoom} style={{ marginTop: '15px', padding: '8px 16px' }}>Join</button>
+      <div className="app-container">
+        <div className="glass-card">
+          <h2>🎬 Watch Party</h2>
+          <p>Host movies with friends in real-time.</p>
+          <input type="text" className="input-field" placeholder="Enter Room ID" value={roomId} onChange={(e) => setRoomId(e.target.value)} />
+          <div style={{ margin: '15px 0' }}>
+            <label style={{ cursor: 'pointer' }}>
+              <input type="checkbox" checked={isAdmin} onChange={(e) => setIsAdmin(e.target.checked)} style={{ marginRight: '8px' }}/>
+              I am the Room Admin
+            </label>
+          </div>
+          <button className="btn-primary" onClick={handleJoinRoom}>Join Room</button>
+        </div>
       </div>
     );
   }
 
   return (
-    <div style={{ textAlign: 'center', padding: '20px' }}>
-      <h2>Room: {roomId} {isAdmin ? '(Admin)' : '(Member)'}</h2>
+    <div className="app-container">
+      <h2>Room: {roomId} <span style={{fontSize: '0.8rem', color: '#8b949e'}}>{isAdmin ? '(Admin)' : '(Member)'}</span></h2>
 
       {isAdmin && (
-        <div style={{ margin: '20px', padding: '20px', border: '1px solid #ccc', borderRadius: '8px' }}>
-          <input type="file" accept="video/*" onChange={(e) => setVideoFile(e.target.files[0])} />
-          <button onClick={handleUpload}>Upload Video</button>
+        <div className="glass-card" style={{ marginBottom: '20px' }}>
+          <h3>Admin Controls</h3>
+          <input type="file" accept="video/*" onChange={(e) => setVideoFile(e.target.files[0])} style={{ marginBottom: '15px', color: '#c9d1d9' }} />
+          <br/>
+          <button className="btn-primary" onClick={handleUpload}>Upload to Cloud</button>
         </div>
       )}
 
-      {videoUrl && (
-        <video ref={videoRef} src={videoUrl} controls={isAdmin} onPlay={handlePlay} onPause={handlePause} onSeeked={handleSeek} width="80%" style={{ border: '2px solid black', marginTop: '20px', borderRadius: '8px' }} />
+      {videoUrl ? (
+        <div className="video-container">
+          <video className="main-video" ref={videoRef} src={videoUrl} controls={isAdmin} onPlay={handlePlay} onPause={handlePause} onSeeked={handleSeek} />
+        </div>
+      ) : (
+        <div className="glass-card" style={{ padding: '40px', margin: '20px 0' }}>
+          <p>Waiting for the admin to upload a video...</p>
+        </div>
       )}
 
-      <div style={{ display: 'flex', justifyContent: 'center', gap: '20px', marginTop: '30px' }}>
+      <div className="dashboard">
         
-        {/* Chatbox */}
-        <div style={{ width: '30%', border: '2px solid #ccc', padding: '15px', borderRadius: '8px' }}>
-          <h3>Chat</h3>
-          <div style={{ height: '150px', overflowY: 'auto', border: '1px solid #eee', marginBottom: '15px', padding: '10px', textAlign: 'left', backgroundColor: '#f9f9f9', color: '#333' }}>
-            {messages.map((msg, idx) => <p key={idx} style={{ margin: '5px 0' }}><strong>{msg.sender}: </strong> {msg.text}</p>)}
+        {/* Chat Panel */}
+        <div className="panel">
+          <h3>Live Chat</h3>
+          <div className="chat-box">
+            {messages.map((msg, idx) => (
+              <div key={idx} className="chat-message">
+                <span className="chat-sender">{msg.sender}:</span> {msg.text}
+              </div>
+            ))}
           </div>
-          <input type="text" value={chatInput} onChange={(e) => setChatInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && sendMessage()} style={{ width: '60%', padding: '8px', border: '1px solid #ccc' }} />
-          <button onClick={sendMessage} style={{ padding: '8px 15px', marginLeft: '10px' }}>Send</button>
+          <div className="chat-input-row">
+            <input type="text" className="input-field" style={{ margin: 0 }} value={chatInput} onChange={(e) => setChatInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && sendMessage()} placeholder="Type a message..." />
+            <button className="btn-primary" onClick={sendMessage}>Send</button>
+          </div>
         </div>
 
-        {/* My Camera */}
-        <div style={{ width: '30%', border: '2px solid #ccc', padding: '15px', borderRadius: '8px' }}>
-          <h3>Me</h3>
-          <video ref={myVideoRef} autoPlay muted style={{ width: '100%', borderRadius: '8px', backgroundColor: '#222' }} />
+        {/* My Camera Panel */}
+        <div className="panel">
+          <h3>My Camera</h3>
+          <video className="cam-video" ref={myVideoRef} autoPlay muted />
         </div>
 
-        {/* Partner Camera */}
-        <div style={{ width: '30%', border: '2px solid #ccc', padding: '15px', borderRadius: '8px', borderColor: '#4CAF50' }}>
-          <h3>Partner</h3>
-          <video ref={partnerVideoRef} autoPlay style={{ width: '100%', borderRadius: '8px', backgroundColor: '#222' }} />
+        {/* Partner Camera Panel */}
+        <div className="panel">
+          <h3>Partner Camera</h3>
+          <video className="cam-video partner" ref={partnerVideoRef} autoPlay />
         </div>
         
       </div>
