@@ -11,6 +11,7 @@ function App() {
   const [isAdmin, setIsAdmin] = useState(false);
   const [videoFile, setVideoFile] = useState(null);
   const [videoUrl, setVideoUrl] = useState('');
+  const [isConnected, setIsConnected] = useState(socket.connected); // NEW: Server Status
   
   const [messages, setMessages] = useState([]);
   const [chatInput, setChatInput] = useState('');
@@ -21,6 +22,27 @@ function App() {
   const [myStream, setMyStream] = useState(null);
   const peerConnectionRef = useRef(null);
 
+  // NEW: Bulletproof Server Connection & Auto-Rejoin
+  useEffect(() => {
+    const onConnect = () => {
+      setIsConnected(true);
+      // If the server blips, force the user back into their room!
+      if (inRoom && roomId) {
+        socket.emit('join-room', roomId);
+      }
+    };
+    const onDisconnect = () => setIsConnected(false);
+
+    socket.on('connect', onConnect);
+    socket.on('disconnect', onDisconnect);
+
+    return () => {
+      socket.off('connect', onConnect);
+      socket.off('disconnect', onDisconnect);
+    };
+  }, [inRoom, roomId]);
+
+  // 1. Get Webcam & Initialize WebRTC
   useEffect(() => {
     if (inRoom) {
       navigator.mediaDevices.getUserMedia({ video: true, audio: true })
@@ -29,10 +51,11 @@ function App() {
           if (myVideoRef.current) myVideoRef.current.srcObject = stream;
           socket.emit('user-ready-for-video', roomId);
         })
-        .catch((error) => console.error('Media access error:', error));
+        .catch((error) => console.error('Camera blocked or unavailable:', error));
     }
   }, [inRoom, roomId]);
 
+  // 2. Handle Socket & WebRTC Events
   useEffect(() => {
     if (!inRoom) return;
 
@@ -40,7 +63,11 @@ function App() {
     socket.on('sync-play', (time) => { if (videoRef.current) { videoRef.current.currentTime = time; videoRef.current.play(); }});
     socket.on('sync-pause', () => { if (videoRef.current) videoRef.current.pause(); });
     socket.on('sync-seek', (time) => { if (videoRef.current) videoRef.current.currentTime = time; });
-    socket.on('receive-message', (data) => setMessages((prev) => [...prev, data]));
+    
+    // Fixed message receiving
+    socket.on('receive-message', (data) => {
+      setMessages((prev) => [...prev, data]);
+    });
 
     const createPeerConnection = () => {
       const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
@@ -80,12 +107,11 @@ function App() {
     };
   }, [inRoom, myStream, roomId]);
 
-  // --- NEW ROOM MANAGEMENT LOGIC ---
+  // UI Handlers
   const handleCreateRoom = () => {
-    // Generate a random 5-character code
     const newRoomCode = Math.random().toString(36).substring(2, 7).toUpperCase();
     setRoomId(newRoomCode);
-    setIsAdmin(true); // Creator is automatically the admin
+    setIsAdmin(true);
     socket.emit('join-room', newRoomCode);
     setInRoom(true);
   };
@@ -94,13 +120,12 @@ function App() {
     const clean = roomId.trim().toUpperCase();
     if (clean !== '') {
       setRoomId(clean);
-      setIsAdmin(false); // Joiners are never admin
+      setIsAdmin(false);
       socket.emit('join-room', clean);
       setInRoom(true);
     }
   };
-  // ---------------------------------
-
+  
   const handleUpload = async () => {
     if (!videoFile) return;
     const formData = new FormData(); formData.append('video', videoFile);
@@ -121,8 +146,13 @@ function App() {
           <h2>🎬 Watch Party</h2>
           <p>Host movies with friends in real-time.</p>
           
+          {/* Connection Status Indicator */}
+          <div style={{ padding: '10px', margin: '10px 0', borderRadius: '5px', backgroundColor: isConnected ? 'rgba(35, 134, 54, 0.2)' : 'rgba(218, 54, 51, 0.2)', color: isConnected ? '#2ea043' : '#ff7b72' }}>
+            {isConnected ? '🟢 Connected to Server' : '🔴 Disconnected - Waking up server...'}
+          </div>
+
           <div style={{ marginTop: '30px', paddingBottom: '20px', borderBottom: '1px solid #30363d' }}>
-            <button className="btn-primary" onClick={handleCreateRoom} style={{ width: '100%', backgroundColor: '#238636' }}>
+            <button className="btn-primary" onClick={handleCreateRoom} style={{ width: '100%', backgroundColor: '#238636' }} disabled={!isConnected}>
               + Create New Room
             </button>
           </div>
@@ -130,11 +160,10 @@ function App() {
           <div style={{ marginTop: '20px' }}>
             <p style={{ fontSize: '0.9rem', color: '#8b949e' }}>Or join an existing room:</p>
             <input type="text" className="input-field" placeholder="Enter 5-Letter Code" value={roomId} onChange={(e) => setRoomId(e.target.value)} style={{ textAlign: 'center', letterSpacing: '2px', textTransform: 'uppercase' }} />
-            <button className="btn-primary" onClick={handleJoinRoom} style={{ width: '100%', marginTop: '10px', backgroundColor: '#1f6feb' }}>
+            <button className="btn-primary" onClick={handleJoinRoom} style={{ width: '100%', marginTop: '10px', backgroundColor: '#1f6feb' }} disabled={!isConnected}>
               Join Room
             </button>
           </div>
-
         </div>
       </div>
     );
@@ -165,7 +194,6 @@ function App() {
       )}
 
       <div className="dashboard">
-        
         {/* Chat Panel */}
         <div className="panel">
           <h3>Live Chat</h3>
@@ -193,7 +221,6 @@ function App() {
           <h3>Partner Camera</h3>
           <video className="cam-video partner" ref={partnerVideoRef} autoPlay />
         </div>
-        
       </div>
     </div>
   );
