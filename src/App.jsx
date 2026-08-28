@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import io from 'socket.io-client';
 import './App.css'; 
 
-const BACKEND_URL = 'https://watch-party-backend-production-abfa.up.railway.app';
+const BACKEND_URL = 'https://watch-party-backend-production-8f66.up.railway.app';
 const socket = io(BACKEND_URL);
 
 function App() {
