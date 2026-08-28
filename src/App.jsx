@@ -16,7 +16,6 @@ function App() {
   const [chatInput, setChatInput] = useState('');
 
   const videoRef = useRef(null);
-  
   const myVideoRef = useRef(null);
   const partnerVideoRef = useRef(null);
   const [myStream, setMyStream] = useState(null);
@@ -81,8 +80,27 @@ function App() {
     };
   }, [inRoom, myStream, roomId]);
 
-  const handleJoinRoom = () => { const clean = roomId.trim(); if (clean !== '') { setRoomId(clean); socket.emit('join-room', clean); setInRoom(true); }};
-  
+  // --- NEW ROOM MANAGEMENT LOGIC ---
+  const handleCreateRoom = () => {
+    // Generate a random 5-character code
+    const newRoomCode = Math.random().toString(36).substring(2, 7).toUpperCase();
+    setRoomId(newRoomCode);
+    setIsAdmin(true); // Creator is automatically the admin
+    socket.emit('join-room', newRoomCode);
+    setInRoom(true);
+  };
+
+  const handleJoinRoom = () => {
+    const clean = roomId.trim().toUpperCase();
+    if (clean !== '') {
+      setRoomId(clean);
+      setIsAdmin(false); // Joiners are never admin
+      socket.emit('join-room', clean);
+      setInRoom(true);
+    }
+  };
+  // ---------------------------------
+
   const handleUpload = async () => {
     if (!videoFile) return;
     const formData = new FormData(); formData.append('video', videoFile);
@@ -102,14 +120,21 @@ function App() {
         <div className="glass-card">
           <h2>🎬 Watch Party</h2>
           <p>Host movies with friends in real-time.</p>
-          <input type="text" className="input-field" placeholder="Enter Room ID" value={roomId} onChange={(e) => setRoomId(e.target.value)} />
-          <div style={{ margin: '15px 0' }}>
-            <label style={{ cursor: 'pointer' }}>
-              <input type="checkbox" checked={isAdmin} onChange={(e) => setIsAdmin(e.target.checked)} style={{ marginRight: '8px' }}/>
-              I am the Room Admin
-            </label>
+          
+          <div style={{ marginTop: '30px', paddingBottom: '20px', borderBottom: '1px solid #30363d' }}>
+            <button className="btn-primary" onClick={handleCreateRoom} style={{ width: '100%', backgroundColor: '#238636' }}>
+              + Create New Room
+            </button>
           </div>
-          <button className="btn-primary" onClick={handleJoinRoom}>Join Room</button>
+
+          <div style={{ marginTop: '20px' }}>
+            <p style={{ fontSize: '0.9rem', color: '#8b949e' }}>Or join an existing room:</p>
+            <input type="text" className="input-field" placeholder="Enter 5-Letter Code" value={roomId} onChange={(e) => setRoomId(e.target.value)} style={{ textAlign: 'center', letterSpacing: '2px', textTransform: 'uppercase' }} />
+            <button className="btn-primary" onClick={handleJoinRoom} style={{ width: '100%', marginTop: '10px', backgroundColor: '#1f6feb' }}>
+              Join Room
+            </button>
+          </div>
+
         </div>
       </div>
     );
@@ -117,7 +142,8 @@ function App() {
 
   return (
     <div className="app-container">
-      <h2>Room: {roomId} <span style={{fontSize: '0.8rem', color: '#8b949e'}}>{isAdmin ? '(Admin)' : '(Member)'}</span></h2>
+      <h2>Room Code: <span style={{ color: '#fff', letterSpacing: '2px' }}>{roomId}</span> <span style={{fontSize: '0.8rem', color: '#8b949e'}}>{isAdmin ? '(Admin)' : '(Member)'}</span></h2>
+      {isAdmin && <p style={{ color: '#8b949e', marginTop: '-10px' }}>Share this code with your friends so they can join!</p>}
 
       {isAdmin && (
         <div className="glass-card" style={{ marginBottom: '20px' }}>
