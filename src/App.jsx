@@ -5,12 +5,10 @@ import './App.css';
 const BACKEND_URL = 'https://watch-party-backend-production-8f66.up.railway.app';
 const socket = io(BACKEND_URL);
 
-// Component for dynamic partner cameras in the mesh network
+// Dynamic Grid Component for Webcams
 const RemoteVideo = ({ stream, id }) => {
   const ref = useRef(null);
-  useEffect(() => {
-    if (ref.current) ref.current.srcObject = stream;
-  }, [stream]);
+  useEffect(() => { if (ref.current) ref.current.srcObject = stream; }, [stream]);
   return (
     <div className="panel">
       <h3>User {id.substring(0, 4)}</h3>
@@ -27,40 +25,27 @@ function App() {
   const [messages, setMessages] = useState([]);
   const [chatInput, setChatInput] = useState('');
 
-  // --- WEBRTC MESH & WEBTORRENT REFS ---
+  // --- DUAL-ENGINE MEDIA STATES ---
+  const [localVideoSrc, setLocalVideoSrc] = useState(null); 
+  const [isScreenSharing, setIsScreenSharing] = useState(false);
+
   const [myStream, setMyStream] = useState(null);
   const [remoteStreams, setRemoteStreams] = useState({});
   const peersRef = useRef({});
-  const wtClient = useRef(null);
-
+  
   const videoRef = useRef(null);
   const myVideoRef = useRef(null);
 
-  // Initialize WebTorrent client
+  // Connection Init
   useEffect(() => {
-    if (window.WebTorrent && !wtClient.current) {
-      wtClient.current = new window.WebTorrent();
-    }
-  }, []);
-
-  // Handle Socket Connection status
-  useEffect(() => {
-    const onConnect = () => {
-      setIsConnected(true);
-      if (inRoom && roomId) socket.emit('join-room', roomId);
-    };
+    const onConnect = () => { setIsConnected(true); if (inRoom && roomId) socket.emit('join-room', roomId); };
     const onDisconnect = () => setIsConnected(false);
-
     socket.on('connect', onConnect);
     socket.on('disconnect', onDisconnect);
-
-    return () => {
-      socket.off('connect', onConnect);
-      socket.off('disconnect', onDisconnect);
-    };
+    return () => { socket.off('connect', onConnect); socket.off('disconnect', onDisconnect); };
   }, [inRoom, roomId]);
 
-  // Request user media for local webcam
+  // Webcam Init
   useEffect(() => {
     if (inRoom) {
       navigator.mediaDevices.getUserMedia({ video: true, audio: true })
@@ -68,26 +53,44 @@ function App() {
           setMyStream(stream);
           if (myVideoRef.current) myVideoRef.current.srcObject = stream;
         })
-        .catch((err) => console.error('Camera access denied:', err));
+        .catch(err => console.error('Camera blocked:', err));
     }
   }, [inRoom]);
 
-  // --- WEBRTC MULTI-USER MESH NETWORK LOGIC ---
+  // --- WEBRTC MESH & DUAL SIGNALING ---
   useEffect(() => {
     if (!inRoom || !myStream) return;
 
     const createPeer = (targetId) => {
       const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+      
+      // Add Webcam Track
       myStream.getTracks().forEach(track => pc.addTrack(track, myStream));
       
+      // Handle Renegotiation for Screen Sharing
+      pc.onnegotiationneeded = async () => {
+        try {
+          const offer = await pc.createOffer();
+          await pc.setLocalDescription(offer);
+          socket.emit('webrtc-offer', { target: targetId, caller: socket.id, offer });
+        } catch (e) { console.error(e); }
+      };
+      
       pc.ontrack = (e) => {
-        setRemoteStreams(prev => ({ ...prev, [targetId]: e.streams[0] }));
+        // If a peer sends a second stream, it is their Screen Share!
+        if (e.streams.length > 1 || (e.track.kind === 'video' && e.streams[0].id !== myStream.id)) {
+            if (videoRef.current && !localVideoSrc) {
+                videoRef.current.srcObject = e.streams[0];
+                setIsScreenSharing(true);
+            }
+        } else {
+            // Otherwise, it is their webcam
+            setRemoteStreams(prev => ({ ...prev, [targetId]: e.streams[0] }));
+        }
       };
       
       pc.onicecandidate = (e) => {
-        if (e.candidate) {
-          socket.emit('webrtc-ice-candidate', { target: targetId, caller: socket.id, candidate: e.candidate });
-        }
+        if (e.candidate) socket.emit('webrtc-ice-candidate', { target: targetId, caller: socket.id, candidate: e.candidate });
       };
       return pc;
     };
@@ -95,13 +98,10 @@ function App() {
     socket.on('user-connected', async (newUserId) => {
       const pc = createPeer(newUserId);
       peersRef.current[newUserId] = pc;
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-      socket.emit('webrtc-offer', { target: newUserId, caller: socket.id, offer });
     });
 
     socket.on('webrtc-offer', async ({ caller, offer }) => {
-      const pc = createPeer(caller);
+      const pc = peersRef.current[caller] || createPeer(caller);
       peersRef.current[caller] = pc;
       await pc.setRemoteDescription(new RTCSessionDescription(offer));
       const answer = await pc.createAnswer();
@@ -110,122 +110,88 @@ function App() {
     });
 
     socket.on('webrtc-answer', async ({ caller, answer }) => {
-      if (peersRef.current[caller]) {
-        await peersRef.current[caller].setRemoteDescription(new RTCSessionDescription(answer));
-      }
+      if (peersRef.current[caller]) await peersRef.current[caller].setRemoteDescription(new RTCSessionDescription(answer));
     });
 
     socket.on('webrtc-ice-candidate', async ({ caller, candidate }) => {
-      if (peersRef.current[caller]) {
-        await peersRef.current[caller].addIceCandidate(new RTCIceCandidate(candidate));
-      }
+      if (peersRef.current[caller]) await peersRef.current[caller].addIceCandidate(new RTCIceCandidate(candidate));
     });
 
     socket.on('user-disconnected', (userId) => {
       if (peersRef.current[userId]) peersRef.current[userId].close();
       delete peersRef.current[userId];
-      setRemoteStreams(prev => {
-        const copy = { ...prev };
-        delete copy[userId];
-        return copy;
-      });
+      setRemoteStreams(prev => { const copy = { ...prev }; delete copy[userId]; return copy; });
     });
 
     return () => {
-      socket.off('user-connected');
-      socket.off('webrtc-offer');
-      socket.off('webrtc-answer');
-      socket.off('webrtc-ice-candidate');
-      socket.off('user-disconnected');
+      socket.off('user-connected'); socket.off('webrtc-offer'); socket.off('webrtc-answer'); socket.off('webrtc-ice-candidate'); socket.off('user-disconnected');
     };
-  }, [inRoom, myStream]);
+  }, [inRoom, myStream, localVideoSrc]);
 
-  // --- WEBTORRENT AND PLAYBACK LISTENERS ---
+  // --- TIMELINE SYNC FOR LOCAL FILES ---
   useEffect(() => {
     if (!inRoom) return;
     
-    socket.on('sync-magnet', (magnetURI) => {
-      if (wtClient.current) {
-        wtClient.current.add(magnetURI, (torrent) => {
-          torrent.files[0].renderTo(videoRef.current);
-        });
-      }
-    });
-
-    socket.on('sync-play', (time) => {
-      if (videoRef.current) {
-        videoRef.current.currentTime = time;
-        videoRef.current.play();
-      }
-    });
-    socket.on('sync-pause', () => { if (videoRef.current) videoRef.current.pause(); });
-    socket.on('sync-seek', (time) => { if (videoRef.current) videoRef.current.currentTime = time; });
+    socket.on('sync-play', (time) => { if (videoRef.current && localVideoSrc) { videoRef.current.currentTime = time; videoRef.current.play(); }});
+    socket.on('sync-pause', () => { if (videoRef.current && localVideoSrc) videoRef.current.pause(); });
+    socket.on('sync-seek', (time) => { if (videoRef.current && localVideoSrc) videoRef.current.currentTime = time; });
     socket.on('receive-message', (data) => setMessages(prev => [...prev, data]));
 
-    return () => {
-      socket.off('sync-magnet');
-      socket.off('sync-play');
-      socket.off('sync-pause');
-      socket.off('sync-seek');
-      socket.off('receive-message');
-    };
-  }, [inRoom]);
+    return () => { socket.off('sync-play'); socket.off('sync-pause'); socket.off('sync-seek'); socket.off('receive-message'); };
+  }, [inRoom, localVideoSrc]);
 
-  // Handlers
-  const handleTorrentSeed = (e) => {
+  // --- ACTIONS ---
+  const handleLocalFileSelect = (e) => {
     const file = e.target.files[0];
-    if (!file || !wtClient.current) return;
-    
-    wtClient.current.seed(file, (torrent) => {
-      socket.emit('sync-magnet', roomId, torrent.magnetURI);
-      torrent.files[0].renderTo(videoRef.current);
-    });
-  };
-
-  const handleCreateRoom = () => {
-    const code = Math.random().toString(36).substring(2, 7).toUpperCase();
-    setRoomId(code);
-    setIsAdmin(true);
-    socket.emit('join-room', code);
-    setInRoom(true);
-  };
-
-  const handleJoinRoom = () => {
-    const clean = roomId.trim().toUpperCase();
-    if (clean !== '') {
-      setRoomId(clean);
-      setIsAdmin(false);
-      socket.emit('join-room', clean);
-      setInRoom(true);
+    if (file) {
+      setLocalVideoSrc(URL.createObjectURL(file));
+      setIsScreenSharing(false);
+      if (videoRef.current) videoRef.current.srcObject = null; // Clear screen share if active
     }
   };
 
-  const handlePlay = () => { if (isAdmin && videoRef.current) socket.emit('play-video', roomId, videoRef.current.currentTime); };
-  const handlePause = () => { if (isAdmin) socket.emit('pause-video', roomId); };
-  const handleSeek = () => { if (isAdmin && videoRef.current) socket.emit('seek-video', roomId, videoRef.current.currentTime); };
-  const sendMessage = () => {
-    if (chatInput.trim() !== '') {
-      socket.emit('send-message', roomId, { sender: isAdmin ? 'Admin' : 'Member', text: chatInput });
-      setChatInput('');
+  const startScreenShare = async () => {
+    try {
+      const screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+      setLocalVideoSrc(null); // Clear local file if active
+      setIsScreenSharing(true);
+      
+      if (videoRef.current) videoRef.current.srcObject = screenStream;
+
+      // Broadcast screen stream to all connected friends
+      Object.values(peersRef.current).forEach(pc => {
+        screenStream.getTracks().forEach(track => pc.addTrack(track, screenStream));
+      });
+
+      // Handle Admin clicking "Stop Sharing"
+      screenStream.getVideoTracks()[0].onended = () => {
+        setIsScreenSharing(false);
+        if (videoRef.current) videoRef.current.srcObject = null;
+      };
+    } catch (err) {
+      console.error("Screen share failed", err);
     }
   };
+
+  const handleCreateRoom = () => { const code = Math.random().toString(36).substring(2, 7).toUpperCase(); setRoomId(code); setIsAdmin(true); socket.emit('join-room', code); setInRoom(true); };
+  const handleJoinRoom = () => { const clean = roomId.trim().toUpperCase(); if (clean !== '') { setRoomId(clean); setIsAdmin(false); socket.emit('join-room', clean); setInRoom(true); }};
+  
+  const handlePlay = () => { if (isAdmin && videoRef.current && localVideoSrc) socket.emit('play-video', roomId, videoRef.current.currentTime); };
+  const handlePause = () => { if (isAdmin && localVideoSrc) socket.emit('pause-video', roomId); };
+  const handleSeek = () => { if (isAdmin && videoRef.current && localVideoSrc) socket.emit('seek-video', roomId, videoRef.current.currentTime); };
+  const sendMessage = () => { if (chatInput.trim() !== '') { socket.emit('send-message', roomId, { sender: isAdmin ? 'Admin' : 'Member', text: chatInput }); setChatInput(''); }};
 
   if (!inRoom) {
     return (
       <div className="app-container" style={{ justifyContent: 'center', alignItems: 'center', height: '100vh' }}>
         <div className="glass-card">
-          <h2>🎬 P2P Watch Party</h2>
-          <p>Decentralized Movie Streaming (3+ Users)</p>
+          <h2>🎬 Hybrid Watch Party</h2>
           <div style={{ padding: '10px', margin: '10px 0', borderRadius: '5px', backgroundColor: isConnected ? 'rgba(35, 134, 54, 0.2)' : 'rgba(218, 54, 51, 0.2)', color: isConnected ? '#2ea043' : '#ff7b72' }}>
             {isConnected ? '🟢 Server Connected' : '🔴 Server Offline'}
           </div>
-          <button className="btn-primary" onClick={handleCreateRoom} style={{ width: '100%', marginBottom: '20px' }} disabled={!isConnected}>
-            + Create Room
-          </button>
+          <button className="btn-primary" onClick={handleCreateRoom} style={{ width: '100%', marginBottom: '20px' }} disabled={!isConnected}>+ Create Room</button>
           <input type="text" className="input-field" placeholder="Enter Code" value={roomId} onChange={(e) => setRoomId(e.target.value)} style={{ textAlign: 'center', textTransform: 'uppercase', marginBottom: '10px' }} />
-          <button className="btn-secondary" onClick={handleJoinRoom} style={{ width: '100%' }} disabled={!isConnected}>
-            Join Room
-          </button>
+          <button className="btn-secondary" onClick={handleJoinRoom} style={{ width: '100%' }} disabled={!isConnected}>Join Room</button>
         </div>
       </div>
     );
@@ -233,33 +199,45 @@ function App() {
 
   return (
     <div className="app-container">
-      {/* Header & Copy Code Option */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', maxWidth: '1200px', marginBottom: '10px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
-          <h2>Room Code: <span style={{ color: '#58a6ff', letterSpacing: '2px' }}>{roomId}</span> <span style={{fontSize: '0.8rem', color: '#8b949e'}}>{isAdmin ? '(Admin)' : '(Member)'}</span></h2>
-          <button className="btn-secondary" onClick={() => { navigator.clipboard.writeText(roomId); alert('Room code copied to clipboard!'); }} style={{ padding: '6px 12px', fontSize: '0.85rem' }}>
-            📋 Copy Code
-          </button>
+          <h2>Room: <span style={{ color: '#58a6ff', letterSpacing: '2px' }}>{roomId}</span> <span style={{fontSize: '0.8rem', color: '#8b949e'}}>{isAdmin ? '(Admin)' : '(Member)'}</span></h2>
+          <button className="btn-secondary" onClick={() => { navigator.clipboard.writeText(roomId); alert('Copied!'); }} style={{ padding: '6px 12px' }}>📋 Copy Code</button>
         </div>
       </div>
 
-      {/* Admin P2P Video Loader */}
-      {isAdmin && (
-        <div className="glass-card" style={{ marginBottom: '20px', maxWidth: '1200px', width: '100%', textAlign: 'left', padding: '15px' }}>
-          <h3 style={{ marginTop: 0 }}>Stream Movie via WebTorrent</h3>
-          <p style={{ fontSize: '0.9rem', color: '#8b949e', marginTop: '-10px' }}>
-            Select an MP4 file. It seeds directly to room members via WebRTC (no cloud upload needed).
-          </p>
-          <input type="file" accept="video/*" onChange={handleTorrentSeed} style={{ color: '#c9d1d9' }} />
+      {/* DUAL MODE CONTROLS */}
+      <div className="glass-card" style={{ marginBottom: '20px', maxWidth: '1200px', width: '100%', textAlign: 'left', padding: '15px' }}>
+        <h3 style={{ marginTop: 0 }}>Select Watch Mode</h3>
+        <div style={{ display: 'flex', gap: '20px', alignItems: 'center' }}>
+          <div style={{ flex: 1, padding: '15px', border: '1px solid #30363d', borderRadius: '8px' }}>
+            <h4>Option A: Zero-Lag Local Sync</h4>
+            <p style={{ fontSize: '0.85rem', color: '#8b949e' }}>Both users select the downloaded .mkv/.mp4 file to sync perfectly.</p>
+            <input type="file" accept="video/*,.mkv" onChange={handleLocalFileSelect} style={{ color: '#c9d1d9' }} />
+          </div>
+          
+          {isAdmin && (
+            <div style={{ flex: 1, padding: '15px', border: '1px solid #30363d', borderRadius: '8px' }}>
+              <h4>Option B: Live Screen Share</h4>
+              <p style={{ fontSize: '0.85rem', color: '#8b949e' }}>Play the movie on VLC and beam your screen to the room.</p>
+              <button className="btn-primary" onClick={startScreenShare}>🖥️ Share Screen & Audio</button>
+            </div>
+          )}
         </div>
-      )}
+      </div>
 
-      {/* Main Player */}
+      {/* MAIN MOVIE PLAYER */}
       <div className="video-container">
-        <video className="main-video" ref={videoRef} controls={isAdmin} onPlay={handlePlay} onPause={handlePause} onSeeked={handleSeek} />
+        {localVideoSrc ? (
+          <video className="main-video" ref={videoRef} src={localVideoSrc} controls={isAdmin} onPlay={handlePlay} onPause={handlePause} onSeeked={handleSeek} />
+        ) : isScreenSharing ? (
+          <video className="main-video" ref={videoRef} autoPlay playsInline controls />
+        ) : (
+          <div className="glass-card" style={{ padding: '40px', width: '100%' }}>Waiting for movie selection...</div>
+        )}
       </div>
 
-      {/* Responsive Mesh Dashboard */}
+      {/* MESH NETWORK GRID */}
       <div className="dynamic-grid">
         <div className="panel chat-panel">
           <h3>Live Chat</h3>
@@ -281,7 +259,6 @@ function App() {
           <video className="cam-video" ref={myVideoRef} autoPlay muted playsInline />
         </div>
 
-        {/* Render dynamic remote participant cameras */}
         {Object.entries(remoteStreams).map(([id, stream]) => (
           <RemoteVideo key={id} id={id} stream={stream} />
         ))}
