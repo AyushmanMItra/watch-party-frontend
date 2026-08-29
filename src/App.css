@@ -1,148 +1,252 @@
 @import url('https://fonts.googleapis.com/css2?family=Oswald:wght@300;400;500;700&display=swap');
 
+* {
+  box-sizing: border-box;
+}
+
 body {
   margin: 0;
   font-family: 'Oswald', sans-serif;
-  background-color: #0d1117;
+  background-color: #05070a;
   color: #c9d1d9;
   letter-spacing: 0.5px;
+  overflow-x: hidden;
 }
 
 h2, h3, h4 {
+  margin: 0 0 10px 0;
   text-transform: uppercase;
   font-weight: 500;
-  letter-spacing: 1px;
+  letter-spacing: 1.5px;
 }
 
-.app-container {
+/* --- LOGIN SCREEN --- */
+.login-screen {
   display: flex;
-  flex-direction: column;
+  justify-content: center;
   align-items: center;
-  padding: 20px;
-  min-height: 100vh;
+  height: 100vh;
 }
 
 .glass-card {
-  background: #161b22;
-  border: 1px solid #30363d;
-  border-radius: 4px;
-  padding: 2rem;
-  box-shadow: 0 8px 24px rgba(0,0,0,0.2);
+  background: #11151c;
+  border: 1px solid #2d333b;
+  border-radius: 6px;
+  padding: 2.5rem;
   width: 100%;
   max-width: 400px;
   text-align: center;
+  box-shadow: 0 15px 35px rgba(0,0,0,0.5);
 }
 
-.dynamic-grid {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: 20px;
-  width: 100%;
-  max-width: 1200px;
-  margin-top: 20px;
-}
-
-.panel {
-  background: #161b22;
-  border: 1px solid #30363d;
+.status-badge {
+  padding: 8px;
+  margin: 15px 0;
   border-radius: 4px;
+  font-size: 0.9rem;
+}
+.status-badge.connected { background-color: rgba(35, 134, 54, 0.15); color: #2ea043; border: 1px solid #238636; }
+.status-badge.disconnected { background-color: rgba(218, 54, 51, 0.15); color: #ff7b72; border: 1px solid #da3633; }
+
+
+/* --- THEATER LAYOUT (DESKTOP) --- */
+.theater-layout {
+  display: flex;
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden;
+}
+
+.main-stage {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 20px;
+  background-color: #000;
+}
+
+.side-panel {
+  width: 380px;
+  background-color: #0d1117;
+  border-left: 1px solid #2d333b;
+  display: flex;
+  flex-direction: column;
+  padding: 20px;
+  gap: 20px;
+  overflow-y: auto;
+}
+
+/* --- MAIN VIDEO AREA --- */
+.header-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+}
+.header-bar h2 span { color: #58a6ff; }
+.header-bar small { color: #8b949e; font-size: 0.9rem; }
+
+.video-container {
+  flex: 1;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  background: #090c10;
+  border: 1px solid #2d333b;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.main-video {
+  width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.empty-state {
+  color: #8b949e;
+  font-size: 1.2rem;
+  letter-spacing: 2px;
+}
+
+/* --- SIDE PANEL SECTIONS --- */
+.panel-section {
+  background: #161b22;
+  border: 1px solid #2d333b;
+  border-radius: 6px;
   padding: 15px;
   display: flex;
   flex-direction: column;
-  flex: 1 1 300px;
-  max-width: 400px;
-  height: 320px;
 }
 
-.chat-panel {
-  flex: 2 1 400px;
-  max-width: 600px;
+.sync-buttons {
+  display: flex;
+  gap: 5px;
+  margin-top: 10px;
+}
+
+/* --- CAMERAS --- */
+.cams-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.cam-wrapper {
+  position: relative;
+  width: 100%;
+  height: 100px;
+  border-radius: 4px;
+  overflow: hidden;
+  border: 1px solid #30363d;
+  background: #000;
+}
+
+.cam-video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.cam-label {
+  position: absolute;
+  bottom: 5px;
+  left: 5px;
+  background: rgba(0,0,0,0.7);
+  padding: 2px 6px;
+  font-size: 0.75rem;
+  border-radius: 3px;
+  z-index: 2;
+}
+
+/* --- CHAT --- */
+.chat-section {
+  flex: 1; 
+  min-height: 250px;
 }
 
 .chat-box {
   flex-grow: 1;
   overflow-y: auto;
   border: 1px solid #30363d;
-  background: #0d1117;
+  background: #090c10;
   padding: 10px;
   margin-bottom: 10px;
-  font-family: 'Oswald', sans-serif;
+  border-radius: 4px;
   font-weight: 300;
 }
 
-.chat-message {
-  margin-bottom: 8px;
-  font-size: 1rem;
-}
+.chat-message { margin-bottom: 8px; font-size: 0.95rem; line-height: 1.4; }
+.chat-admin { color: #58a6ff; font-weight: 500; }
+.chat-member { color: #3fb950; font-weight: 500; }
 
-.chat-input-row {
-  display: flex;
-  gap: 10px;
-}
+.chat-input-row { display: flex; gap: 10px; }
 
-.video-container {
-  width: 100%;
-  max-width: 1200px;
-  margin: 10px 0;
-  display: flex;
-  justify-content: center;
-}
-
-.main-video {
-  width: 100%;
-  max-height: 60vh;
-  border-radius: 4px;
-  background: #000;
-  border: 1px solid #30363d;
-}
-
-.cam-video {
-  width: 100%;
-  height: 220px;
-  object-fit: cover;
-  border-radius: 4px;
-  background: #000;
-  margin-top: 10px;
-  border: 1px solid #30363d;
-}
-
+/* --- INPUTS & BUTTONS --- */
 .input-field {
   width: 100%;
   padding: 10px;
   border-radius: 4px;
   border: 1px solid #30363d;
-  background-color: #0d1117;
+  background-color: #090c10;
   color: white;
-  box-sizing: border-box;
   font-family: 'Oswald', sans-serif;
+  letter-spacing: 1px;
 }
 
-.btn-primary {
-  background-color: #238636;
-  color: white;
+.code-input { text-align: center; margin-bottom: 15px; font-size: 1.2rem; }
+
+button {
+  font-family: 'Oswald', sans-serif;
+  padding: 10px 15px;
+  border-radius: 4px;
+  cursor: pointer;
+  text-transform: uppercase;
+  letter-spacing: 1px;
   border: none;
-  padding: 10px 16px;
-  border-radius: 4px;
-  cursor: pointer;
-  font-weight: 500;
-  text-transform: uppercase;
+  font-size: 0.9rem;
+  transition: opacity 0.2s;
 }
+button:hover { opacity: 0.8; }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
 
-.btn-secondary {
-  background-color: #21262d;
-  color: #c9d1d9;
-  border: 1px solid #30363d;
-  padding: 8px 14px;
-  border-radius: 4px;
-  cursor: pointer;
-  text-transform: uppercase;
-}
+.btn-primary { background-color: #238636; color: white; margin-bottom: 15px; }
+.btn-secondary { background-color: #21262d; color: #c9d1d9; border: 1px solid #30363d; }
+.btn-outline { background: transparent; border: 1px solid #58a6ff; color: #58a6ff; padding: 6px 12px;}
+.btn-action { background-color: #1f6feb; color: white; flex: 1; padding: 8px; font-size: 0.8rem; }
+.full-width { width: 100%; display: block; text-align: center; cursor: pointer; }
 
+
+/* --- MOBILE RESPONSIVENESS --- */
 @media (max-width: 900px) {
-  .dynamic-grid {
+  .theater-layout {
     flex-direction: column;
-    align-items: center;
+    overflow-y: auto;
+    height: auto;
+    min-height: 100vh;
   }
-  .panel, .chat-panel { max-width: 100%; width: 100%; }
+  
+  .main-stage {
+    height: 40vh; /* Keeps video visible at top of screen */
+    min-height: 300px;
+    padding: 10px;
+  }
+
+  .side-panel {
+    width: 100%;
+    border-left: none;
+    border-top: 1px solid #2d333b;
+    padding: 15px;
+  }
+
+  .cams-grid {
+    display: flex;
+    overflow-x: auto;
+    padding-bottom: 5px;
+  }
+  
+  .cam-wrapper {
+    min-width: 120px;
+    height: 90px;
+  }
 }

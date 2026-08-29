@@ -1,18 +1,17 @@
 import { useState, useRef, useEffect } from 'react';
 import io from 'socket.io-client';
-import { FFmpeg } from '@ffmpeg/ffmpeg';
-import { fetchFile } from '@ffmpeg/util';
 import './App.css'; 
 
-const BACKEND_URL = 'http://localhost:5000'; // Update to Railway URL for production
+// Live Railway Backend
+const BACKEND_URL = 'https://watch-party-backend-production-8f66.up.railway.app';
 const socket = io(BACKEND_URL);
 
 const RemoteVideo = ({ stream, id }) => {
   const ref = useRef(null);
   useEffect(() => { if (ref.current) ref.current.srcObject = stream; }, [stream]);
   return (
-    <div className="panel">
-      <h3>User {id.substring(0, 4)}</h3>
+    <div className="cam-wrapper">
+      <span className="cam-label">User {id.substring(0, 4)}</span>
       <video className="cam-video" ref={ref} autoPlay playsInline />
     </div>
   );
@@ -23,95 +22,80 @@ function App() {
   const [inRoom, setInRoom] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
   const [isConnected, setIsConnected] = useState(socket.connected);
+  
+  const [localVideoSrc, setLocalVideoSrc] = useState(null); 
+  const [isScreenSharing, setIsScreenSharing] = useState(false);
+
   const [messages, setMessages] = useState([]);
   const [chatInput, setChatInput] = useState('');
-  const [isProcessing, setIsProcessing] = useState(false);
 
-  // WebRTC & Media States
   const [myStream, setMyStream] = useState(null);
   const [remoteStreams, setRemoteStreams] = useState({});
   const peersRef = useRef({});
+  
   const videoRef = useRef(null);
   const myVideoRef = useRef(null);
-  
-  // FFmpeg & MSE Refs
-  const ffmpegRef = useRef(new FFmpeg());
-  const mediaSourceRef = useRef(null);
-  const sourceBufferRef = useRef(null);
-  const queueRef = useRef([]);
 
-  // 1. Connection & MSE Initialization
+  // Connection Init
   useEffect(() => {
     const onConnect = () => { setIsConnected(true); if (inRoom && roomId) socket.emit('join-room', roomId); };
     const onDisconnect = () => setIsConnected(false);
     socket.on('connect', onConnect);
     socket.on('disconnect', onDisconnect);
-
-    // Initialize FFmpeg
-    const loadFFmpeg = async () => {
-      const ffmpeg = ffmpegRef.current;
-      if (!ffmpeg.loaded) {
-        await ffmpeg.load();
-        console.log("FFmpeg core loaded");
-      }
-    };
-    loadFFmpeg();
-
     return () => { socket.off('connect', onConnect); socket.off('disconnect', onDisconnect); };
   }, [inRoom, roomId]);
 
-  // Setup MediaSource when entering room
-  useEffect(() => {
-    if (inRoom && videoRef.current) {
-      const ms = new MediaSource();
-      mediaSourceRef.current = ms;
-      videoRef.current.src = URL.createObjectURL(ms);
-
-      ms.addEventListener('sourceopen', () => {
-        // Prepare to receive fragmented MP4 (H.264 video, AAC audio)
-        const sb = ms.addSourceBuffer('video/mp4; codecs="avc1.42E01E, mp4a.40.2"');
-        sourceBufferRef.current = sb;
-
-        sb.addEventListener('updateend', () => {
-          if (queueRef.current.length > 0 && !sb.updating) {
-            sb.appendBuffer(queueRef.current.shift());
-          }
-        });
-      });
-    }
-  }, [inRoom]);
-
-  // 2. WebRTC Mesh for Cameras
+  // Webcam Init
   useEffect(() => {
     if (inRoom) {
       navigator.mediaDevices.getUserMedia({ video: true, audio: true })
         .then((stream) => {
           setMyStream(stream);
           if (myVideoRef.current) myVideoRef.current.srcObject = stream;
-        }).catch(err => console.error(err));
+        }).catch(err => console.error('Camera blocked:', err));
     }
   }, [inRoom]);
 
+  // WebRTC Mesh & Screen Share Injector
   useEffect(() => {
     if (!inRoom || !myStream) return;
+
     const createPeer = (targetId) => {
       const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
       myStream.getTracks().forEach(track => pc.addTrack(track, myStream));
-      pc.ontrack = (e) => setRemoteStreams(prev => ({ ...prev, [targetId]: e.streams[0] }));
-      pc.onicecandidate = (e) => { if (e.candidate) socket.emit('webrtc-ice-candidate', { target: targetId, caller: socket.id, candidate: e.candidate }); };
+      
+      pc.onnegotiationneeded = async () => {
+        try {
+          const offer = await pc.createOffer();
+          await pc.setLocalDescription(offer);
+          socket.emit('webrtc-offer', { target: targetId, caller: socket.id, offer });
+        } catch (e) { console.error(e); }
+      };
+      
+      pc.ontrack = (e) => {
+        if (e.streams.length > 1 || (e.track.kind === 'video' && e.streams[0].id !== myStream.id)) {
+            if (videoRef.current && !localVideoSrc) {
+                videoRef.current.srcObject = e.streams[0];
+                setIsScreenSharing(true);
+            }
+        } else {
+            setRemoteStreams(prev => ({ ...prev, [targetId]: e.streams[0] }));
+        }
+      };
+      
+      pc.onicecandidate = (e) => {
+        if (e.candidate) socket.emit('webrtc-ice-candidate', { target: targetId, caller: socket.id, candidate: e.candidate });
+      };
       return pc;
     };
 
     socket.on('user-connected', async (newUserId) => {
       const pc = createPeer(newUserId);
       peersRef.current[newUserId] = pc;
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-      socket.emit('webrtc-offer', { target: newUserId, caller: socket.id, offer });
     });
 
     socket.on('webrtc-offer', async ({ caller, offer }) => {
-      const pc = createPeer(caller);
+      const pc = peersRef.current[caller] || createPeer(caller);
       peersRef.current[caller] = pc;
       await pc.setRemoteDescription(new RTCSessionDescription(offer));
       const answer = await pc.createAnswer();
@@ -119,8 +103,14 @@ function App() {
       socket.emit('webrtc-answer', { target: caller, caller: socket.id, answer });
     });
 
-    socket.on('webrtc-answer', async ({ caller, answer }) => { if (peersRef.current[caller]) await peersRef.current[caller].setRemoteDescription(new RTCSessionDescription(answer)); });
-    socket.on('webrtc-ice-candidate', async ({ caller, candidate }) => { if (peersRef.current[caller]) await peersRef.current[caller].addIceCandidate(new RTCIceCandidate(candidate)); });
+    socket.on('webrtc-answer', async ({ caller, answer }) => {
+      if (peersRef.current[caller]) await peersRef.current[caller].setRemoteDescription(new RTCSessionDescription(answer));
+    });
+
+    socket.on('webrtc-ice-candidate', async ({ caller, candidate }) => {
+      if (peersRef.current[caller]) await peersRef.current[caller].addIceCandidate(new RTCIceCandidate(candidate));
+    });
+
     socket.on('user-disconnected', (userId) => {
       if (peersRef.current[userId]) peersRef.current[userId].close();
       delete peersRef.current[userId];
@@ -130,127 +120,148 @@ function App() {
     return () => {
       socket.off('user-connected'); socket.off('webrtc-offer'); socket.off('webrtc-answer'); socket.off('webrtc-ice-candidate'); socket.off('user-disconnected');
     };
-  }, [inRoom, myStream]);
+  }, [inRoom, myStream, localVideoSrc]);
 
-  // 3. Receive Relayed Chunks & Sync Playback
+  // Playback & Chat Sync Listeners
   useEffect(() => {
     if (!inRoom) return;
-
-    // Push incoming binary chunks into the MSE queue
-    socket.on('video-chunk', (chunk) => {
-      const sb = sourceBufferRef.current;
-      if (sb && !sb.updating) {
-        sb.appendBuffer(chunk);
-      } else {
-        queueRef.current.push(chunk);
-      }
-    });
-
-    socket.on('sync-play', (time) => { if (videoRef.current) { videoRef.current.currentTime = time; videoRef.current.play(); }});
-    socket.on('sync-pause', () => { if (videoRef.current) videoRef.current.pause(); });
-    socket.on('sync-seek', (time) => { if (videoRef.current) videoRef.current.currentTime = time; });
+    socket.on('sync-play', (time) => { if (videoRef.current && localVideoSrc) { videoRef.current.currentTime = time; videoRef.current.play(); }});
+    socket.on('sync-pause', () => { if (videoRef.current && localVideoSrc) videoRef.current.pause(); });
+    socket.on('sync-seek', (time) => { if (videoRef.current && localVideoSrc) videoRef.current.currentTime = time; });
     socket.on('receive-message', (data) => setMessages(prev => [...prev, data]));
 
-    return () => { socket.off('video-chunk'); socket.off('sync-play'); socket.off('sync-pause'); socket.off('sync-seek'); socket.off('receive-message'); };
-  }, [inRoom]);
+    return () => { socket.off('sync-play'); socket.off('sync-pause'); socket.off('sync-seek'); socket.off('receive-message'); };
+  }, [inRoom, localVideoSrc]);
 
-  // 4. The FFmpeg Remuxer (Admin Only)
-  const processAndStreamVideo = async (e) => {
+  // UI Actions
+  const handleLocalFileSelect = (e) => {
     const file = e.target.files[0];
-    if (!file) return;
-    setIsProcessing(true);
-
-    const ffmpeg = ffmpegRef.current;
-    
-    // Write original MKV to FFmpeg memory
-    await ffmpeg.writeFile('input.mkv', await fetchFile(file));
-
-    // Run the fast-remux: Copy video codec, transcode audio to AAC, fragment MP4
-    await ffmpeg.exec([
-      '-i', 'input.mkv',
-      '-c:v', 'copy', 
-      '-c:a', 'aac',
-      '-movflags', 'frag_keyframe+empty_moov+default_base_moof',
-      'output.mp4'
-    ]);
-
-    // Read the processed output
-    const data = await ffmpeg.readFile('output.mp4');
-    
-    // Play locally via MSE
-    const sb = sourceBufferRef.current;
-    if (sb && !sb.updating) {
-      sb.appendBuffer(data.buffer);
-    } else {
-      queueRef.current.push(data.buffer);
+    if (file) {
+      setLocalVideoSrc(URL.createObjectURL(file));
+      setIsScreenSharing(false);
+      if (videoRef.current) videoRef.current.srcObject = null;
     }
+  };
 
-    // Blast the binary data to the backend relay for all peers
-    socket.emit('video-chunk', roomId, data.buffer);
-    setIsProcessing(false);
+  const startScreenShare = async () => {
+    try {
+      const screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+      setLocalVideoSrc(null); 
+      setIsScreenSharing(true);
+      if (videoRef.current) videoRef.current.srcObject = screenStream;
+
+      Object.values(peersRef.current).forEach(pc => {
+        screenStream.getTracks().forEach(track => pc.addTrack(track, screenStream));
+      });
+
+      screenStream.getVideoTracks()[0].onended = () => {
+        setIsScreenSharing(false);
+        if (videoRef.current) videoRef.current.srcObject = null;
+      };
+    } catch (err) { console.error("Screen share failed", err); }
   };
 
   const handleCreateRoom = () => { const code = Math.random().toString(36).substring(2, 7).toUpperCase(); setRoomId(code); setIsAdmin(true); socket.emit('join-room', code); setInRoom(true); };
   const handleJoinRoom = () => { const clean = roomId.trim().toUpperCase(); if (clean !== '') { setRoomId(clean); setIsAdmin(false); socket.emit('join-room', clean); setInRoom(true); }};
-  const handlePlay = () => { if (isAdmin && videoRef.current) socket.emit('play-video', roomId, videoRef.current.currentTime); };
-  const handlePause = () => { if (isAdmin) socket.emit('pause-video', roomId); };
-  const handleSeek = () => { if (isAdmin && videoRef.current) socket.emit('seek-video', roomId, videoRef.current.currentTime); };
+  
+  // Custom Control Buttons (Force Sync)
+  const syncPlay = () => { if (isAdmin && videoRef.current && localVideoSrc) socket.emit('play-video', roomId, videoRef.current.currentTime); };
+  const syncPause = () => { if (isAdmin && localVideoSrc) socket.emit('pause-video', roomId); };
+  const syncSeek = () => { if (isAdmin && videoRef.current && localVideoSrc) socket.emit('seek-video', roomId, videoRef.current.currentTime); };
   const sendMessage = () => { if (chatInput.trim() !== '') { socket.emit('send-message', roomId, { sender: isAdmin ? 'Admin' : 'Member', text: chatInput }); setChatInput(''); }};
 
   if (!inRoom) {
     return (
-      <div className="app-container" style={{ justifyContent: 'center', alignItems: 'center', height: '100vh' }}>
+      <div className="login-screen">
         <div className="glass-card">
-          <h2>🎬 MSE Stream Engine</h2>
-          <div style={{ padding: '10px', margin: '10px 0', borderRadius: '5px', backgroundColor: isConnected ? 'rgba(35, 134, 54, 0.2)' : 'rgba(218, 54, 51, 0.2)', color: isConnected ? '#2ea043' : '#ff7b72' }}>
-            {isConnected ? '🟢 Relay Connected' : '🔴 Server Offline'}
+          <h2>🎬 WATCH PARTY</h2>
+          <div className={`status-badge ${isConnected ? 'connected' : 'disconnected'}`}>
+            {isConnected ? '🟢 SERVER ONLINE' : '🔴 CONNECTING...'}
           </div>
-          <button className="btn-primary" onClick={handleCreateRoom} style={{ width: '100%', marginBottom: '20px' }}>+ Create Room</button>
-          <input type="text" className="input-field" placeholder="Enter Code" value={roomId} onChange={(e) => setRoomId(e.target.value)} style={{ textAlign: 'center', textTransform: 'uppercase', marginBottom: '10px' }} />
-          <button className="btn-secondary" onClick={handleJoinRoom} style={{ width: '100%' }}>Join Room</button>
+          <button className="btn-primary" onClick={handleCreateRoom} disabled={!isConnected}>+ CREATE ROOM</button>
+          <input type="text" className="input-field code-input" placeholder="ENTER CODE" value={roomId} onChange={(e) => setRoomId(e.target.value)} />
+          <button className="btn-secondary" onClick={handleJoinRoom} disabled={!isConnected}>JOIN ROOM</button>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="app-container">
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', maxWidth: '1200px', marginBottom: '10px' }}>
-        <h2>Room: <span style={{ color: '#58a6ff', letterSpacing: '2px' }}>{roomId}</span> <span style={{fontSize: '0.8rem', color: '#8b949e'}}>{isAdmin ? '(Admin)' : '(Member)'}</span></h2>
-      </div>
-
-      {isAdmin && (
-        <div className="glass-card" style={{ marginBottom: '20px', maxWidth: '1200px', width: '100%', textAlign: 'left', padding: '15px' }}>
-          <h3 style={{ marginTop: 0 }}>Stream MKV Source</h3>
-          <p style={{ fontSize: '0.85rem', color: '#8b949e', marginTop: '-10px' }}>Select an MKV file. FFmpeg will instantly repackage it to fMP4 and relay it to the room.</p>
-          <input type="file" accept="video/*,.mkv" onChange={processAndStreamVideo} disabled={isProcessing} style={{ color: '#c9d1d9' }} />
-          {isProcessing && <span style={{ color: '#58a6ff', marginLeft: '15px' }}>⏳ Processing container remux...</span>}
+    <div className="theater-layout">
+      {/* LEFT: MAIN STAGE */}
+      <div className="main-stage">
+        <div className="header-bar">
+          <h2>ROOM: <span>{roomId}</span> <small>{isAdmin ? '(ADMIN)' : '(MEMBER)'}</small></h2>
+          <button className="btn-outline" onClick={() => { navigator.clipboard.writeText(roomId); alert('Copied!'); }}>📋 COPY CODE</button>
         </div>
-      )}
 
-      <div className="video-container">
-        <video className="main-video" ref={videoRef} controls={isAdmin} onPlay={handlePlay} onPause={handlePause} onSeeked={handleSeek} />
+        <div className="video-container">
+          {localVideoSrc ? (
+            <video className="main-video" ref={videoRef} src={localVideoSrc} controls={isAdmin} onPlay={syncPlay} onPause={syncPause} onSeeked={syncSeek} />
+          ) : isScreenSharing ? (
+            <video className="main-video" ref={videoRef} autoPlay playsInline controls />
+          ) : (
+            <div className="empty-state">WAITING FOR MOVIE SELECTION...</div>
+          )}
+        </div>
       </div>
 
-      <div className="dynamic-grid">
-        <div className="panel chat-panel">
-          <h3>Live Chat</h3>
+      {/* RIGHT: SIDE PANEL */}
+      <div className="side-panel">
+        
+        {/* Control Box */}
+        <div className="panel-section controls-section">
+          <h3>CONTROLS</h3>
+          
+          <div className="file-input-wrapper">
+             <label className="btn-secondary full-width">
+                📂 CHOOSE LOCAL MOVIE
+                <input type="file" accept="video/*,.mkv" onChange={handleLocalFileSelect} style={{ display: 'none' }} />
+             </label>
+          </div>
+
+          {isAdmin && (
+            <div className="admin-controls">
+              <div className="sync-buttons">
+                <button className="btn-action" onClick={syncPlay}>▶ PLAY</button>
+                <button className="btn-action" onClick={syncPause}>⏸ PAUSE</button>
+                <button className="btn-action" onClick={syncSeek}>🔄 SYNC TIME</button>
+              </div>
+              <button className="btn-primary full-width" style={{marginTop: '10px'}} onClick={startScreenShare}>🖥️ SCREEN SHARE (FALLBACK)</button>
+            </div>
+          )}
+        </div>
+
+        {/* Cameras Box */}
+        <div className="panel-section cams-section">
+          <h3>PARTY MEMBERS</h3>
+          <div className="cams-grid">
+            <div className="cam-wrapper">
+              <span className="cam-label">You</span>
+              <video className="cam-video" ref={myVideoRef} autoPlay muted playsInline />
+            </div>
+            {Object.entries(remoteStreams).map(([id, stream]) => (
+              <RemoteVideo key={id} id={id} stream={stream} />
+            ))}
+          </div>
+        </div>
+
+        {/* Chat Box */}
+        <div className="panel-section chat-section">
+          <h3>LIVE CHAT</h3>
           <div className="chat-box">
             {messages.map((msg, idx) => (
-              <div key={idx} className="chat-message"><span style={{ color: msg.sender === 'Admin' ? '#58a6ff' : '#3fb950' }}>{msg.sender}:</span> {msg.text}</div>
+              <div key={idx} className="chat-message">
+                <span className={msg.sender === 'Admin' ? 'chat-admin' : 'chat-member'}>{msg.sender}:</span> {msg.text}
+              </div>
             ))}
           </div>
           <div className="chat-input-row">
-            <input type="text" className="input-field" value={chatInput} onChange={(e) => setChatInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && sendMessage()} placeholder="Message..." />
-            <button className="btn-primary" onClick={sendMessage}>Send</button>
+            <input type="text" className="input-field" value={chatInput} onChange={(e) => setChatInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && sendMessage()} placeholder="MESSAGE..." />
+            <button className="btn-primary" onClick={sendMessage}>SEND</button>
           </div>
         </div>
 
-        <div className="panel">
-          <h3>You</h3>
-          <video className="cam-video" ref={myVideoRef} autoPlay muted playsInline />
-        </div>
-        {Object.entries(remoteStreams).map(([id, stream]) => <RemoteVideo key={id} id={id} stream={stream} />)}
       </div>
     </div>
   );
